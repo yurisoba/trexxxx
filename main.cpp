@@ -15,7 +15,7 @@
 
 struct Instruction;
 
-#define REG_COUNT 16
+#define REG_COUNT 32
 #define SCRATCH_COUNT 4
 
 class Emulator
@@ -31,7 +31,9 @@ public:
     unsigned scratch[SCRATCH_COUNT];
 
     // notify
-    int notify_register = -1;
+    // TODO: better notification, require overhaul in UI architcture
+    int notify_register = -1;  // written
+    int notify_register2 = -1; // read
 
     void load_image(const char *filename);
     void step();
@@ -44,6 +46,7 @@ public:
         for (unsigned int& i : registers)
             i = 0;
         notify_register = -1;
+        notify_register2 = -1;
     }
 
     unsigned get(unsigned addr)
@@ -67,6 +70,43 @@ struct UnknownInstruction: Instruction
 {
     UnknownInstruction() : Instruction("UNIMPLEMENTED/UNKNOWN") {}
     void exec(Emulator& emu) override {}
+};
+
+struct AddImmediateInstruction : Instruction
+{
+    bool shift = false;
+    unsigned short rn = -1;
+    unsigned short rd = -1;
+    bool tempflag = false; // addi unimplemented, == is_mov()?
+
+    explicit AddImmediateInstruction(unsigned ins) : Instruction("add") {
+        // TODO: handle 32
+        shift = (ins & (1 << 22)) != 0;
+        rn = (ins >> 5) & 0b11111;
+        rd = ins & 0b11111;
+        unsigned imm12 = (ins >> 10) & 0b111111111111;
+
+        char buf[64];
+        if (!shift && imm12 == 0 && (rn == 0b11111 || rd == 0b11111)) {
+            mnemonic = "mov";
+            tempflag = true;
+            if (rn == 0b11111) {
+                sprintf(buf, "x%u, sp", rd);
+            } else {
+                sprintf(buf, "sp, x%u", rn);
+            }
+            arg = std::string(buf);
+        } else {
+            arg = "???";
+        }
+    }
+    void exec(Emulator& emu) override {
+        if (!tempflag)
+            return;
+        emu.registers[rd] += emu.registers[rn];
+        emu.notify_register = rd;
+        emu.notify_register2 = rn;
+    }
 };
 
 struct LoadLiteralInstruction: Instruction
@@ -106,9 +146,19 @@ void Emulator::load_image(const char *filename)
         memory.push_back(word);
 
         Instruction *instruction;
-        if (((word & (1 << 27)) != 0) && ((word & (1 << 25)) == 0)) { // x1x0
+        if (((word >> 26) & 0b111) == 0b100) { // 100x
             instruction = new UnknownInstruction();
-            // mnemonic = "Loads and Stores";
+            instruction->mnemonic = "Data Processing - Immediate";
+            if (((word >> 23) & 0b111) == 0b010) { // 010x
+                instruction->mnemonic = "Add/subtract (immediate)";
+                if ((word & (1 << 30)) == 0) { // x0x
+                    instruction = new AddImmediateInstruction(word);
+                }
+            }
+        }
+        else if (((word & (1 << 27)) != 0) && ((word & (1 << 25)) == 0)) { // x1x0
+            instruction = new UnknownInstruction();
+            instruction->mnemonic = "Loads and Stores";
             if (((word & (0b11 << 28)) == (0b01 << 28)) && ((word & (1 << 24)) == 0))
                 instruction = new LoadLiteralInstruction(word);
         }
@@ -125,6 +175,7 @@ void Emulator::step()
     for (unsigned int& i : scratch)
         i = 0;
     notify_register = -1;
+    notify_register2 = -1;
 
     unsigned ins_idx = (PC - start_address) / 4;
     i_cache[ins_idx]->exec(*this);
@@ -192,7 +243,7 @@ int main()
                 for (const auto& ins : emu.i_cache) {
                     ImGui::TableNextColumn();
                     if (emu.PC == PC)
-                        ImGui::TableSetBgColor(ImGuiTableBgTarget_RowBg0, ImGui::GetColorU32(ImColor(0, 80, 50).Value));
+                        ImGui::TableSetBgColor(ImGuiTableBgTarget_RowBg0, ImGui::GetColorU32(ImColor(0, 120, 50).Value));
                     ImGui::Text("%x", PC);
                     ImGui::TableNextColumn(); ImGui::Text("%x", ins->word);
                     ImGui::TableNextColumn(); ImGui::TextUnformatted(ins->mnemonic);
@@ -207,10 +258,18 @@ int main()
         if (ImGui::Begin("STATE")) {
             if (ImGui::BeginTable("state-reg-t", 2, ImGuiTableFlags_RowBg | ImGuiTableFlags_SizingStretchProp)) {
                 // TODO: implement notify-state-change and check-state-change
-                for (int i = 0; i < REG_COUNT; i++) {
+                ImGui::TableNextColumn(); ImGui::TextUnformatted("sp");
+                if (emu.notify_register == 31)
+                    ImGui::TableSetBgColor(ImGuiTableBgTarget_RowBg0, ImGui::GetColorU32(ImColor(0, 0, 255).Value));
+                if (emu.notify_register2 == 31)
+                    ImGui::TableSetBgColor(ImGuiTableBgTarget_RowBg0, ImGui::GetColorU32(ImColor(150, 150, 0).Value));
+                ImGui::TableNextColumn(); ImGui::Text("%08x", emu.registers[31]);
+                for (int i = 0; i < REG_COUNT - 1; i++) {
                     ImGui::TableNextColumn();
                     if (emu.notify_register == i)
-                        ImGui::TableSetBgColor(ImGuiTableBgTarget_RowBg0, ImGui::GetColorU32(ImColor(0, 0, 100).Value));
+                        ImGui::TableSetBgColor(ImGuiTableBgTarget_RowBg0, ImGui::GetColorU32(ImColor(0, 0, 255).Value));
+                    if (emu.notify_register2 == i)
+                        ImGui::TableSetBgColor(ImGuiTableBgTarget_RowBg0, ImGui::GetColorU32(ImColor(150, 150, 0).Value));
                     ImGui::Text("x%u", i);
                     ImGui::TableNextColumn();
                     ImGui::Text("%08x", emu.registers[i]);
