@@ -68,7 +68,7 @@ struct Instruction
 
 struct UnknownInstruction: Instruction
 {
-    UnknownInstruction() : Instruction("UNIMPLEMENTED/UNKNOWN") {}
+    UnknownInstruction() : Instruction("???") {}
     void exec(Emulator& emu) override {}
 };
 
@@ -147,10 +147,8 @@ struct LoadLiteralInstruction: Instruction
     {
         // TODO: differ 64 ldr and 32 ldr
         unsigned imm19 = (ins >> 5) & 0b1111111111111111111;
-        mnemonic = "ldr";
         offset = imm19 * 4;
         rt = ins & 0b11111;
-        // value = emu.get(PC + lli->offset);
 
         char buf[64];
         sprintf(buf, "x%u, <PC + 0x%x>", rt, offset);
