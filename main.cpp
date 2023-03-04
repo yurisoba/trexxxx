@@ -109,6 +109,35 @@ struct AddImmediateInstruction : Instruction
     }
 };
 
+struct CompareBranchInstruction : Instruction
+{
+    bool invert = false;
+    unsigned offset = -1;
+    unsigned short rt = -1;
+
+    explicit CompareBranchInstruction(unsigned ins) : Instruction("")
+    {
+        unsigned imm19 = (ins >> 5) & 0b1111111111111111111;
+        invert = ins & (1 << 24);
+        mnemonic = invert ? "cbnz" : "cbz";
+        offset = imm19 * 4;
+        rt = ins & 0b11111;
+
+        char buf[64];
+        sprintf(buf, "x%u, <PC + 0x%x>", rt, offset);
+        arg = std::string(buf);
+    }
+
+    void exec(Emulator& emu) override
+    {
+        emu.scratch[0] = invert ? (emu.registers[rt] != 0) : (emu.registers[rt] == 0);
+        if (emu.scratch[0]) {
+            emu.scratch[1] = emu.PC + offset - 4; // -4 to take account into the next +4 ins fetch
+            emu.PC = emu.scratch[1];
+        }
+    }
+};
+
 struct LoadLiteralInstruction: Instruction
 {
     unsigned offset = -1;   // offset from PC to load from
@@ -154,6 +183,14 @@ void Emulator::load_image(const char *filename)
                 if ((word & (1 << 30)) == 0) { // x0x
                     instruction = new AddImmediateInstruction(word);
                 }
+            }
+        }
+        else if (((word >> 26) & 0b111) == 0b101) { // 101x
+            if (((word >> 29) & 0b11) == 0b01 && ((word & (1 << 25) ) == 0)) { // x01
+                instruction = new CompareBranchInstruction(word);
+            } else {
+                instruction = new UnknownInstruction();
+                instruction->mnemonic = "Branches, etc";
             }
         }
         else if (((word & (1 << 27)) != 0) && ((word & (1 << 25)) == 0)) { // x1x0
